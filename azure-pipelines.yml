@@ -1,0 +1,175 @@
+# Multi-Stage Azure DevOps Pipeline
+# Demonstrates: Build → Test → Deploy workflow with artifact management
+
+trigger:
+  branches:
+    include:
+    - main
+    - develop
+  paths:
+    include:
+    - src/**
+    - scripts/**
+    - azure-pipelines.yml
+
+pr:
+  branches:
+    include:
+    - main
+    - develop
+
+variables:
+  buildConfiguration: 'Release'
+  imageVersion: '1.0.0'
+  artifactPath: '$(Build.ArtifactStagingDirectory)'
+  
+stages:
+- stage: Build
+  displayName: 'Build Stage'
+  jobs:
+  - job: BuildJob
+    displayName: 'Build and Package'
+    pool:
+      vmImage: 'windows-latest'
+    
+    steps:
+    - checkout: self
+      fetchDepth: 0
+    
+    # Log build information
+    - script: |
+        echo Build ID: $(Build.BuildId)
+        echo Build Number: $(Build.BuildNumber)
+        echo Source Branch: $(Build.SourceBranch)
+        echo Source Version: $(Build.SourceVersion)
+      displayName: 'Log Build Info'
+    
+    # Restore and build (example with C# or similar)
+    - script: |
+        dotnet restore
+        dotnet build --configuration $(buildConfiguration) --no-restore
+      displayName: 'Restore and Build'
+      continueOnError: false
+    
+    # Run unit tests
+    - script: |
+        dotnet test --configuration $(buildConfiguration) --no-build --logger trx
+      displayName: 'Run Unit Tests'
+      continueOnError: true
+    
+    # Publish test results
+    - task: PublishTestResults@2
+      displayName: 'Publish Test Results'
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFormat: 'VSTest'
+        testResultsFiles: '**/*.trx'
+    
+    # Create artifact package
+    - script: |
+        dotnet publish --configuration $(buildConfiguration) -o $(artifactPath)
+      displayName: 'Create Artifact'
+    
+    # Copy additional files to artifact
+    - task: CopyFiles@2
+      displayName: 'Copy Configuration Files'
+      inputs:
+        sourceFolder: '$(Build.SourcesDirectory)/config'
+        contents: '**'
+        targetFolder: '$(artifactPath)/config'
+    
+    # Publish build artifacts
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifacts'
+      inputs:
+        pathToPublish: '$(artifactPath)'
+        artifactName: 'build-$(Build.BuildId)'
+        publishLocation: 'Container'
+
+- stage: Test
+  displayName: 'Test Stage'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: ValidationJob
+    displayName: 'Validation and Testing'
+    pool:
+      vmImage: 'windows-latest'
+    
+    steps:
+    - checkout: self
+    
+    # Download artifacts from build stage
+    - task: DownloadBuildArtifacts@0
+      displayName: 'Download Build Artifacts'
+      inputs:
+        buildType: 'current'
+        downloadType: 'single'
+        artifactName: 'build-$(Build.BuildId)'
+        downloadPath: '$(System.ArtifactsDirectory)'
+    
+    # Run integration tests
+    - script: |
+        echo Running integration tests...
+        dotnet test --configuration $(buildConfiguration) --filter "Category=Integration"
+      displayName: 'Run Integration Tests'
+      continueOnError: true
+    
+    # Code quality checks (example)
+    - script: |
+        echo Running static analysis...
+        REM Example: Add your code analysis tool here
+      displayName: 'Code Quality Analysis'
+
+- stage: Deploy
+  displayName: 'Deploy Stage'
+  dependsOn: Test
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: DeployJob
+    displayName: 'Deploy to Target'
+    pool:
+      vmImage: 'windows-latest'
+    
+    environment: 'Production'
+    
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          
+          # Download artifacts
+          - task: DownloadBuildArtifacts@0
+            displayName: 'Download Artifacts for Deployment'
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'build-$(Build.BuildId)'
+              downloadPath: '$(System.ArtifactsDirectory)'
+          
+          # Pre-deployment validation
+          - script: |
+              echo Validating deployment package...
+              REM Add validation logic here
+              dir "$(System.ArtifactsDirectory)"
+            displayName: 'Validate Deployment Package'
+          
+          # Deploy (example)
+          - script: |
+              echo Deploying application...
+              REM Add your deployment commands here
+              REM Example: Copy files to target, restart services, etc.
+            displayName: 'Deploy Application'
+          
+          # Post-deployment validation
+          - script: |
+              echo Running post-deployment tests...
+              REM Add smoke tests or validation here
+            displayName: 'Post-Deployment Validation'
+          
+          # Create deployment record
+          - script: |
+              echo Deployment completed successfully
+              echo Date: %date% %time%
+            displayName: 'Log Deployment'

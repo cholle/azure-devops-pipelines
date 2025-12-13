@@ -1,0 +1,165 @@
+# Windows Image Build and Deployment Pipeline
+# Demonstrates: Driver injection, image creation, and automated testing
+
+trigger:
+  branches:
+    include:
+    - main
+  paths:
+    include:
+    - drivers/**
+    - scripts/**
+    - images/**
+
+variables:
+  imageBasePath: 'C:\Images'
+  driverSourcePath: '$(Build.SourcesDirectory)\drivers'
+  scriptPath: '$(Build.SourcesDirectory)\scripts'
+  imageVersion: '22H2'
+
+stages:
+- stage: PrepareImage
+  displayName: 'Prepare Windows Image'
+  jobs:
+  - job: ImageBuild
+    displayName: 'Build and Configure Image'
+    pool:
+      vmImage: 'windows-latest'
+    
+    steps:
+    - checkout: self
+    
+    # Validate driver files
+    - script: |
+        echo Validating driver packages...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Validate-Drivers.ps1" -DriverPath "$(driverSourcePath)"
+      displayName: 'Validate Drivers'
+    
+    # Mount base image
+    - script: |
+        echo Mounting base Windows image...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Mount-WindowsImage.ps1" -ImagePath "$(imageBasePath)\base-image.wim" -MountPoint "$(imageBasePath)\mount"
+      displayName: 'Mount Base Image'
+    
+    # Inject drivers into image
+    - script: |
+        echo Injecting drivers into image...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Inject-Drivers.ps1" -DriverPath "$(driverSourcePath)" -MountPoint "$(imageBasePath)\mount"
+      displayName: 'Inject Drivers'
+    
+    # Apply Windows updates (offline)
+    - script: |
+        echo Applying offline updates...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Apply-Updates.ps1" -MountPoint "$(imageBasePath)\mount"
+      displayName: 'Apply Updates'
+    
+    # Unmount and commit image
+    - script: |
+        echo Committing image changes...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Unmount-WindowsImage.ps1" -MountPoint "$(imageBasePath)\mount"
+      displayName: 'Unmount Image'
+    
+    # Copy final image to artifact location
+    - task: CopyFiles@2
+      displayName: 'Stage Final Image'
+      inputs:
+        sourceFolder: '$(imageBasePath)'
+        contents: 'final-image.wim'
+        targetFolder: '$(Build.ArtifactStagingDirectory)'
+    
+    # Publish artifact
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Image Artifact'
+      inputs:
+        pathToPublish: '$(Build.ArtifactStagingDirectory)'
+        artifactName: 'windows-image-$(imageVersion)-$(Build.BuildId)'
+
+- stage: TestImage
+  displayName: 'Test and Validate Image'
+  dependsOn: PrepareImage
+  condition: succeeded()
+  jobs:
+  - job: ImageValidation
+    displayName: 'Validate Deployed Image'
+    pool:
+      vmImage: 'windows-latest'
+    
+    steps:
+    # Download image artifact
+    - task: DownloadBuildArtifacts@0
+      displayName: 'Download Image'
+      inputs:
+        buildType: 'current'
+        artifactName: 'windows-image-$(imageVersion)-$(Build.BuildId)'
+        downloadPath: '$(System.ArtifactsDirectory)'
+    
+    # Mount and validate
+    - script: |
+        echo Mounting image for validation...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Mount-WindowsImage.ps1" -ImagePath "$(System.ArtifactsDirectory)\final-image.wim" -MountPoint "$(imageBasePath)\validate"
+      displayName: 'Mount for Validation'
+    
+    # Check drivers are present
+    - script: |
+        echo Validating driver presence...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Validate-ImageDrivers.ps1" -MountPoint "$(imageBasePath)\validate"
+      displayName: 'Verify Drivers'
+      continueOnError: false
+    
+    # Check system files integrity
+    - script: |
+        echo Checking system file integrity...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Check-SystemIntegrity.ps1" -MountPoint "$(imageBasePath)\validate"
+      displayName: 'System Integrity Check'
+    
+    # Unmount
+    - script: |
+        echo Unmounting validation mount...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Unmount-WindowsImage.ps1" -MountPoint "$(imageBasePath)\validate"
+      displayName: 'Unmount Validation'
+
+- stage: DeployImage
+  displayName: 'Deploy to Devices'
+  dependsOn: TestImage
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - job: DeviceDeployment
+    displayName: 'Deploy to Target Devices'
+    pool:
+      vmImage: 'windows-latest'
+    
+    steps:
+    # Download validated image
+    - task: DownloadBuildArtifacts@0
+      displayName: 'Download Validated Image'
+      inputs:
+        buildType: 'current'
+        artifactName: 'windows-image-$(imageVersion)-$(Build.BuildId)'
+        downloadPath: '$(System.ArtifactsDirectory)'
+    
+    # Provision devices
+    - script: |
+        echo Provisioning target devices...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Provision-Devices.ps1" -ImagePath "$(System.ArtifactsDirectory)\final-image.wim" -DeviceList "$(scriptPath)\devices.csv"
+      displayName: 'Provision Devices'
+    
+    # Deploy and test on devices
+    - script: |
+        echo Deploying image and running device tests...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Deploy-AndTest.ps1" -ImagePath "$(System.ArtifactsDirectory)\final-image.wim"
+      displayName: 'Deploy and Test'
+    
+    # Collect device logs
+    - script: |
+        echo Collecting device test logs...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Collect-DeviceLogs.ps1" -OutputPath "$(Build.ArtifactStagingDirectory)\logs"
+      displayName: 'Collect Device Logs'
+      continueOnError: true
+    
+    # Publish test results
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Test Results'
+      condition: always()
+      inputs:
+        pathToPublish: '$(Build.ArtifactStagingDirectory)\logs'
+        artifactName: 'device-test-logs-$(Build.BuildId)'
