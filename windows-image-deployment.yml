@@ -1,5 +1,6 @@
 # Windows Image Build and Deployment Pipeline
 # Demonstrates: Driver injection, image creation, and automated testing
+# Uses approved PowerShell verb naming for operational clarity
 
 trigger:
   branches:
@@ -29,11 +30,11 @@ stages:
     steps:
     - checkout: self
     
-    # Validate driver files
+    # Test driver files (using approved verb: Test)
     - script: |
-        echo Validating driver packages...
-        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Validate-Drivers.ps1" -DriverPath "$(driverSourcePath)"
-      displayName: 'Validate Drivers'
+        echo Testing driver packages...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Test-Drivers.ps1" -DriverPath "$(driverSourcePath)"
+      displayName: 'Test Drivers'
     
     # Mount base image
     - script: |
@@ -41,23 +42,23 @@ stages:
         powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Mount-WindowsImage.ps1" -ImagePath "$(imageBasePath)\base-image.wim" -MountPoint "$(imageBasePath)\mount"
       displayName: 'Mount Base Image'
     
-    # Inject drivers into image
+    # Add drivers to image (using approved verb: Add)
     - script: |
-        echo Injecting drivers into image...
-        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Inject-Drivers.ps1" -DriverPath "$(driverSourcePath)" -MountPoint "$(imageBasePath)\mount"
-      displayName: 'Inject Drivers'
+        echo Adding drivers to image...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Add-ImageDriver.ps1" -DriverPath "$(driverSourcePath)" -MountPoint "$(imageBasePath)\mount"
+      displayName: 'Add Image Drivers'
     
     # Apply Windows updates (offline)
     - script: |
         echo Applying offline updates...
-        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Apply-Updates.ps1" -MountPoint "$(imageBasePath)\mount"
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Publish-WindowsUpdate.ps1" -MountPoint "$(imageBasePath)\mount"
       displayName: 'Apply Updates'
     
-    # Unmount and commit image
+    # Dismount and commit image
     - script: |
         echo Committing image changes...
-        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Unmount-WindowsImage.ps1" -MountPoint "$(imageBasePath)\mount"
-      displayName: 'Unmount Image'
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Dismount-WindowsImage.ps1" -MountPoint "$(imageBasePath)\mount"
+      displayName: 'Dismount Image'
     
     # Copy final image to artifact location
     - task: CopyFiles@2
@@ -99,24 +100,24 @@ stages:
         powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Mount-WindowsImage.ps1" -ImagePath "$(System.ArtifactsDirectory)\final-image.wim" -MountPoint "$(imageBasePath)\validate"
       displayName: 'Mount for Validation'
     
-    # Check drivers are present
+    # Check drivers are present (using approved verb: Test)
     - script: |
         echo Validating driver presence...
-        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Validate-ImageDrivers.ps1" -MountPoint "$(imageBasePath)\validate"
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Test-ImageDrivers.ps1" -MountPoint "$(imageBasePath)\validate"
       displayName: 'Verify Drivers'
       continueOnError: false
     
-    # Check system files integrity
+    # Check system files integrity (using approved verb: Test)
     - script: |
         echo Checking system file integrity...
-        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Check-SystemIntegrity.ps1" -MountPoint "$(imageBasePath)\validate"
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Test-SystemIntegrity.ps1" -MountPoint "$(imageBasePath)\validate"
       displayName: 'System Integrity Check'
     
-    # Unmount
+    # Dismount
     - script: |
-        echo Unmounting validation mount...
-        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Unmount-WindowsImage.ps1" -MountPoint "$(imageBasePath)\validate"
-      displayName: 'Unmount Validation'
+        echo Dismounting validation mount...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Dismount-WindowsImage.ps1" -MountPoint "$(imageBasePath)\validate"
+      displayName: 'Dismount Validation'
 
 - stage: DeployImage
   displayName: 'Deploy to Devices'
@@ -137,29 +138,29 @@ stages:
         artifactName: 'windows-image-$(imageVersion)-$(Build.BuildId)'
         downloadPath: '$(System.ArtifactsDirectory)'
     
-    # Provision devices
+    # Initialize devices (using approved verb: Initialize)
     - script: |
-        echo Provisioning target devices...
-        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Provision-Devices.ps1" -ImagePath "$(System.ArtifactsDirectory)\final-image.wim" -DeviceList "$(scriptPath)\devices.csv"
-      displayName: 'Provision Devices'
+        echo Initializing target devices...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Initialize-Devices.ps1" -ImagePath "$(System.ArtifactsDirectory)\final-image.wim" -DeviceList "$(scriptPath)\devices.csv"
+      displayName: 'Initialize Devices'
     
-    # Deploy and test on devices
+    # Deploy and validate on devices (using approved verb: Invoke)
     - script: |
-        echo Deploying image and running device tests...
-        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Deploy-AndTest.ps1" -ImagePath "$(System.ArtifactsDirectory)\final-image.wim"
-      displayName: 'Deploy and Test'
+        echo Deploying image and running device validation...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Invoke-DeploymentAndValidation.ps1" -ImagePath "$(System.ArtifactsDirectory)\final-image.wim"
+      displayName: 'Deploy and Validate'
     
-    # Collect device logs
+    # Collect device logs (using approved verb: Get)
     - script: |
-        echo Collecting device test logs...
-        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Collect-DeviceLogs.ps1" -OutputPath "$(Build.ArtifactStagingDirectory)\logs"
-      displayName: 'Collect Device Logs'
+        echo Collecting device validation logs...
+        powershell -ExecutionPolicy Bypass -File "$(scriptPath)\Get-DeviceLogs.ps1" -OutputPath "$(Build.ArtifactStagingDirectory)\logs"
+      displayName: 'Get Device Logs'
       continueOnError: true
     
     # Publish test results
     - task: PublishBuildArtifacts@1
-      displayName: 'Publish Test Results'
+      displayName: 'Publish Validation Results'
       condition: always()
       inputs:
         pathToPublish: '$(Build.ArtifactStagingDirectory)\logs'
-        artifactName: 'device-test-logs-$(Build.BuildId)'
+        artifactName: 'device-validation-logs-$(Build.BuildId)'
